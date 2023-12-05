@@ -1,0 +1,182 @@
+version: '3.7'
+
+services:
+  postgresBd:
+    image: postgres:10
+    restart: always
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=db_beeleza
+    ports:
+      - '5432:5432'
+    volumes:
+      - ./volumes/db/postgres:/var/lib/postgresql/data
+    networks:
+      - app
+    deploy:
+     resources:
+       limits:
+         cpus: '2'
+         memory: 6144M
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.9
+    container_name: elk_elasticsearch
+    restart: on-failure
+    volumes:
+      - ./volumes/elasticsearch:/usr/share/elasticsearch/data
+    environment:
+      - node.name=elasticsearch
+      - cluster.name=es-docker-cluster
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - http.cors.enabled=true
+      - http.cors.allow-origin="*"
+      - discovery.type=single-node
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    ports:
+      - '9200:9200'
+      - '9300:9300'
+    networks:
+      - app
+    deploy:
+     resources:
+       limits:
+         cpus: '1'
+         memory: 4096M
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.17.9
+    container_name: elk_kibana
+    restart: always
+    ports:
+      - '5601:5601'
+    environment:
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    networks:
+      - app
+    deploy:
+     resources:
+       limits:
+         cpus: '1'
+         memory: 2048M
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:7.17.9
+    container_name: elk_filebeat
+    restart: always
+    command: filebeat -e -strict.perms=false
+    volumes:
+      - ./filebeat/filebeat.docker.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro          
+      - /var/run/docker.sock:/var/run/docker.sock:ro                      
+      - ./volumes/filebeat/data:/usr/share/filebeat/data:rw                        
+    user: root                                                             
+    depends_on:
+      - elasticsearch
+      - kibana
+    networks:
+      - app
+    deploy:
+     resources:
+       limits:
+         cpus: '1'
+         memory: 2048M
+
+  metricbeat:
+    image: docker.elastic.co/beats/metricbeat:7.17.9
+    container_name: elk_metricbeat
+    restart: always
+    user: root
+    command: metricbeat -e -strict.perms=false
+    volumes:      
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./metric/metricbeat.yml:/usr/share/metricbeat/metricbeat.yml
+    depends_on:
+      - elasticsearch
+      - kibana
+    networks: 
+      - app
+    deploy:
+     resources:
+       limits:
+         cpus: '1'
+         memory: 2048M
+
+  heartbeat:
+    image: docker.elastic.co/beats/heartbeat:7.17.9
+    container_name: elk_heartbeat
+    restart: always
+    command: heartbeat -e -strict.perms=false
+    volumes:      
+    - ./heartbeat/heartbeat.yml:/usr/share/heartbeat/heartbeat.yml
+    environment: 
+    - setup.kibana.host=kibana:5601
+    depends_on:
+      - elasticsearch
+      - kibana
+    networks: 
+      - app
+    deploy:
+     resources:
+       limits:
+         cpus: '1'
+         memory: 2048M
+
+  apm-server:
+    image: docker.elastic.co/apm/apm-server:7.17.9
+    container_name: elk_apm
+    restart: always
+    ports:
+      - "8200:8200"
+    environment:
+      - output.elasticsearch.hosts=["elasticsearch:9200"]
+    depends_on:
+      - elasticsearch
+    networks:
+      - app
+    deploy:
+     resources:
+       limits:
+         cpus: '1'
+         memory: 2048M
+
+  demo_app:
+    container_name: demo_app
+    restart: always
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_HOST=postgresBd
+      - SPRING_PROFILES_ACTIVE=production
+      - ELASTIC_APM_SERVICE_NAME=demo_app
+      - ELASTIC_APM_SERVER_URL=http://apm-server:8200
+    labels:
+      collect_logs_with_filebeat: "true"
+      decode_log_event_to_json_object: "true"
+    depends_on:
+      - elasticsearch
+      - apm-server
+      - filebeat
+      - postgresBd
+    networks:
+      - app
+    deploy:
+     resources:
+       limits:
+         cpus: '2'
+         memory: 6144M
+
+networks:
+  app:
+    external: true
