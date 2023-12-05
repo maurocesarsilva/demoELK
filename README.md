@@ -1,6 +1,4 @@
-# demoELK
-
-# docker network create app
-
-# mvn clean install
+- docker network create app
+- mvn clean install
+- docker-compose up
  
